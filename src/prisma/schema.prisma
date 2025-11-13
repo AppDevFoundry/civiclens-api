@@ -54,3 +54,188 @@ model User {
   comments   Comment[]
   demo       Boolean   @default(false)
 }
+
+// ============================================================================
+// Congress.gov API Models
+// ============================================================================
+
+/// Congressional bills and legislation
+model Bill {
+  id                 Int       @id @default(autoincrement())
+  congress           Int
+  billType           String    // hr, s, hjres, sjres, hconres, sconres, hres, sres
+  billNumber         Int
+  title              String?
+  originChamber      String?   // House, Senate
+  originChamberCode  String?   // H, S
+  updateDate         DateTime?
+  updateDateIncludingText DateTime?
+  introducedDate     DateTime?
+  latestActionDate   DateTime?
+  latestActionText   String?
+  policyArea         String?
+  constitutionalAuthorityStatementText String?
+
+  // Sponsor information
+  sponsorBioguideId  String?
+  sponsorFirstName   String?
+  sponsorLastName    String?
+  sponsorFullName    String?
+  sponsorState       String?
+  sponsorParty       String?
+
+  // Status and tracking
+  lawNumber          String?
+  isLaw              Boolean   @default(false)
+
+  // Metadata
+  congressGovUrl     String?
+  apiResponseData    Json?     // Store full API response for reference
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  // Composite unique constraint for Congress.gov bills
+  @@unique([congress, billType, billNumber])
+  @@index([congress, billType])
+  @@index([sponsorBioguideId])
+  @@index([updateDate])
+  @@index([introducedDate])
+}
+
+/// Members of Congress
+model Member {
+  id                 Int       @id @default(autoincrement())
+  bioguideId         String    @unique // Unique identifier from Congress.gov
+
+  // Personal information
+  firstName          String?
+  middleName         String?
+  lastName           String?
+  fullName           String?
+  nickName           String?
+  suffix             String?
+
+  // Current position
+  state              String?
+  district           Int?      // null for Senators
+  party              String?   // D, R, I, etc.
+  partyName          String?   // Democratic, Republican, Independent
+  chamber            String?   // House, Senate
+
+  // Status
+  isCurrent          Boolean   @default(true)
+
+  // Contact and media
+  officialWebsiteUrl String?
+  imageUrl           String?
+
+  // Dates
+  birthYear          Int?
+
+  // Terms served
+  terms              Json?     // Array of term objects
+
+  // Metadata
+  apiResponseData    Json?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([state])
+  @@index([party])
+  @@index([chamber])
+  @@index([isCurrent])
+}
+
+/// Congressional committees
+model Committee {
+  id                 Int       @id @default(autoincrement())
+  systemCode         String    @unique // Unique identifier from Congress.gov (e.g., "hsag00")
+  committeeCode      String?   // Chamber-specific code
+
+  name               String
+  type               String?   // Standing, Select, Special, Joint
+  chamber            String?   // House, Senate, Joint
+
+  isCurrent          Boolean   @default(true)
+
+  // Parent committee for subcommittees
+  parentSystemCode   String?
+
+  // Subcommittees stored as JSON array
+  subcommittees      Json?
+
+  // Metadata
+  congressGovUrl     String?
+  apiResponseData    Json?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  hearings           Hearing[]
+
+  @@index([chamber])
+  @@index([isCurrent])
+  @@index([parentSystemCode])
+}
+
+/// Presidential nominations
+model Nomination {
+  id                 Int       @id @default(autoincrement())
+  congress           Int
+  nominationNumber   String
+  partNumber         String?
+
+  // Nominee information
+  citation           String?
+  description        String?
+  organization       String?
+
+  // Status
+  latestActionDate   DateTime?
+  latestActionText   String?
+
+  // Metadata
+  receivedDate       DateTime?
+  congressGovUrl     String?
+  apiResponseData    Json?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([congress, nominationNumber])
+  @@index([congress])
+  @@index([organization])
+}
+
+/// Committee hearings
+model Hearing {
+  id                 Int       @id @default(autoincrement())
+  congress           Int
+  chamber            String    // House, Senate, Joint
+  jacketNumber       String?   // Unique identifier from Congress.gov
+
+  title              String
+
+  // Date and location
+  date               DateTime?
+  location           String?
+
+  // Associated committee
+  committeeCode      String?
+  committee          Committee? @relation(fields: [committeeSystemCode], references: [systemCode])
+  committeeSystemCode String?
+
+  // Metadata
+  congressGovUrl     String?
+  apiResponseData    Json?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([congress])
+  @@index([chamber])
+  @@index([date])
+  @@index([committeeSystemCode])
+}
