@@ -221,22 +221,43 @@ curl http://localhost:3000/api/committees?chamber=House
 
 ### Testing
 
-The Congress.gov integration includes comprehensive test coverage:
+The Congress.gov integration includes comprehensive test coverage with multiple testing strategies:
+
+#### Running Tests
 
 ```shell
 # Run all tests
 npm run test
 
+# Run integration tests only (API endpoints)
+npm run test:api
+
+# Run unit tests only (services, utilities)
+npm run test:unit
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
+
 # Run Congress-specific tests
 npm run test -- congress
 ```
 
-Tests use:
-- **nock** for mocking HTTP requests to Congress.gov API
-- **jest-mock-extended** for mocking Prisma database calls
+#### Test Types
+
+##### 1. Unit Tests (`src/tests/services/`)
+
+Unit tests validate individual services and utilities in isolation using mocks:
+
+**Tools:**
+- **Jest** - Testing framework
+- **nock** - HTTP request mocking for Congress.gov API
+- **jest-mock-extended** - Prisma database mocking
 - Test fixtures in `src/tests/fixtures/congress/`
 
-Example test structure:
+**Example:**
 ```typescript
 import nock from 'nock';
 import prismaMock from '../prisma-mock';
@@ -257,6 +278,79 @@ test('should fetch and cache bills', async () => {
   expect(result.bills).toHaveLength(2);
 });
 ```
+
+##### 2. Integration Tests (`src/tests/integration/`)
+
+Integration tests validate Express endpoints end-to-end using supertest:
+
+**Tools:**
+- **Supertest** - HTTP assertion library for Express
+- **nock** - Mock external Congress.gov API calls
+- **Jest** - Test runner
+
+**Example:**
+```typescript
+import request from 'supertest';
+import nock from 'nock';
+import app from '../../app';
+
+test('GET /api/bills should return bills list', async () => {
+  // Mock Congress.gov API
+  nock('https://api.congress.gov')
+    .get('/v3/bill')
+    .query(true)
+    .reply(200, mockBillsResponse);
+
+  // Test Express endpoint
+  const response = await request(app)
+    .get('/api/bills')
+    .query({ congress: 118, limit: 10 })
+    .expect(200);
+
+  expect(response.body.bills).toBeDefined();
+  expect(response.body.pagination).toBeDefined();
+});
+```
+
+##### 3. Manual Testing with Postman
+
+For manual API testing and documentation, use the Postman collection:
+
+**Setup:**
+1. Import collection: `postman/CivicLens-Congress-API.postman_collection.json`
+2. Import environment:
+   - Local: `postman/Local.postman_environment.json`
+   - Production: `postman/Production.postman_environment.json`
+3. Select the appropriate environment
+4. Run individual requests or entire folders
+
+**Features:**
+- 25+ pre-configured requests covering all endpoints
+- Automated test assertions for each request
+- Environment variables for easy switching between local/production
+- Test data variables (bioguideIds, bill numbers, etc.)
+
+**Running in CI/CD:**
+```shell
+# Using newman (Postman CLI)
+npm install -g newman
+newman run postman/CivicLens-Congress-API.postman_collection.json \
+  -e postman/Production.postman_environment.json
+```
+
+#### Test Coverage Goals
+
+- **Unit Tests**: Cover all service methods, error handling, and edge cases
+- **Integration Tests**: Validate all Express endpoints, parameter validation, response formats
+- **Manual Tests**: Document API usage, onboard new developers, validate against production
+
+#### Best Practices
+
+1. **Never hit real APIs in tests**: Always use nock to mock Congress.gov API calls
+2. **Mock database operations**: Use jest-mock-extended for Prisma to avoid database dependencies
+3. **Test error scenarios**: Validate handling of 404, 429, 500, and other error codes
+4. **Test pagination**: Ensure limit, offset, and pagination metadata work correctly
+5. **Validate response schemas**: Check that responses match expected TypeScript types
 
 ### Database Models
 

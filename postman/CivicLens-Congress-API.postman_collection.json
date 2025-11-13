@@ -1,0 +1,734 @@
+{
+	"info": {
+		"_postman_id": "congress-api-collection",
+		"name": "CivicLens - Congress.gov API",
+		"description": "Comprehensive API collection for testing CivicLens Congress.gov integration.\n\n## Features\n- Health checks and diagnostics\n- Bills and legislation queries\n- Member lookups and sponsorship data\n- Committee information and reports\n- Nominations and hearings\n\n## Setup\n1. Import this collection into Postman\n2. Import the corresponding environment file\n3. Set your `baseUrl` in the environment (default: http://localhost:3000)\n4. Start testing!\n\n## Authentication\nCurrently, all endpoints use `auth.optional` middleware, so authentication is not required but supported.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health & Diagnostics",
+			"item": [
+				{
+					"name": "Ping Congress API",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response time is less than 2000ms\", function () {",
+									"    pm.expect(pm.response.responseTime).to.be.below(2000);",
+									"});",
+									"",
+									"pm.test(\"API is healthy\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.status).to.eql(\"healthy\");",
+									"    pm.expect(jsonData.service).to.eql(\"Congress.gov API\");",
+									"    pm.expect(jsonData.timestamp).to.exist;",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/congress/ping",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["congress", "ping"]
+						},
+						"description": "Health check endpoint to verify Congress.gov API connectivity and service status."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for checking API health and connectivity"
+		},
+		{
+			"name": "Bills",
+			"item": [
+				{
+					"name": "List Bills",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has bills array\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.bills).to.be.an('array');",
+									"    pm.expect(jsonData.bills.length).to.be.greaterThan(0);",
+									"});",
+									"",
+									"pm.test(\"Response has pagination\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.pagination).to.exist;",
+									"    pm.expect(jsonData.pagination.count).to.be.a('number');",
+									"});",
+									"",
+									"pm.test(\"Bill has required fields\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    var bill = jsonData.bills[0];",
+									"    pm.expect(bill.congress).to.be.a('number');",
+									"    pm.expect(bill.type).to.be.a('string');",
+									"    pm.expect(bill.number).to.exist;",
+									"    pm.expect(bill.url).to.be.a('string');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/bills?limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["bills"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}",
+									"description": "Number of results to return"
+								}
+							]
+						},
+						"description": "Fetch a list of bills from Congress.gov with optional pagination."
+					},
+					"response": []
+				},
+				{
+					"name": "List Bills (Filtered)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Bills match congress filter\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    jsonData.bills.forEach(function(bill) {",
+									"        pm.expect(bill.congress).to.eql(parseInt(pm.variables.get('congress')));",
+									"    });",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/bills?congress={{congress}}&billType=hr&limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["bills"],
+							"query": [
+								{
+									"key": "congress",
+									"value": "{{congress}}",
+									"description": "Congress session number (e.g., 118)"
+								},
+								{
+									"key": "billType",
+									"value": "hr",
+									"description": "Bill type: hr, s, hjres, sjres, hconres, sconres, hres, sres"
+								},
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}",
+									"description": "Number of results"
+								},
+								{
+									"key": "offset",
+									"value": "0",
+									"description": "Pagination offset",
+									"disabled": true
+								},
+								{
+									"key": "sort",
+									"value": "updateDate desc",
+									"description": "Sort order",
+									"disabled": true
+								}
+							]
+						},
+						"description": "Fetch bills with filtering by congress session, bill type, and other parameters."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Bill by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has bill object\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.bill).to.exist;",
+									"    pm.expect(jsonData.bill).to.be.an('object');",
+									"});",
+									"",
+									"pm.test(\"Bill details are complete\", function () {",
+									"    var bill = pm.response.json().bill;",
+									"    pm.expect(bill.title).to.be.a('string');",
+									"    pm.expect(bill.latestAction).to.exist;",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/bills/:congress/:type/:number",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["bills", ":congress", ":type", ":number"],
+							"variable": [
+								{
+									"key": "congress",
+									"value": "119",
+									"description": "Congress session number"
+								},
+								{
+									"key": "type",
+									"value": "hr",
+									"description": "Bill type (hr, s, etc.)"
+								},
+								{
+									"key": "number",
+									"value": "5371",
+									"description": "Bill number"
+								}
+							]
+						},
+						"description": "Fetch detailed information about a specific bill."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Bill Actions",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has actions array\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.actions).to.be.an('array');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/bills/:congress/:type/:number/actions",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["bills", ":congress", ":type", ":number", "actions"],
+							"variable": [
+								{
+									"key": "congress",
+									"value": "119"
+								},
+								{
+									"key": "type",
+									"value": "hr"
+								},
+								{
+									"key": "number",
+									"value": "5371"
+								}
+							]
+						},
+						"description": "Fetch legislative actions/history for a specific bill."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Bill Subjects",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/bills/:congress/:type/:number/subjects",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["bills", ":congress", ":type", ":number", "subjects"],
+							"variable": [
+								{
+									"key": "congress",
+									"value": "119"
+								},
+								{
+									"key": "type",
+									"value": "hr"
+								},
+								{
+									"key": "number",
+									"value": "5371"
+								}
+							]
+						},
+						"description": "Fetch policy areas and subjects for a specific bill."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for querying Congressional bills and legislation"
+		},
+		{
+			"name": "Members",
+			"item": [
+				{
+					"name": "List Members",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has members array\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.members).to.be.an('array');",
+									"});",
+									"",
+									"pm.test(\"Member has required fields\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    if (jsonData.members.length > 0) {",
+									"        var member = jsonData.members[0];",
+									"        pm.expect(member.bioguideId).to.be.a('string');",
+									"        pm.expect(member.name).to.be.a('string');",
+									"    }",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/members?limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["members"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}"
+								},
+								{
+									"key": "currentMember",
+									"value": "true",
+									"disabled": true
+								},
+								{
+									"key": "state",
+									"value": "CA",
+									"disabled": true
+								},
+								{
+									"key": "party",
+									"value": "D",
+									"disabled": true
+								},
+								{
+									"key": "chamber",
+									"value": "House",
+									"disabled": true
+								}
+							]
+						},
+						"description": "Fetch a list of Congress members with optional filtering."
+					},
+					"response": []
+				},
+				{
+					"name": "List Members (Filtered by State)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/members?state=CA&chamber=House&limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["members"],
+							"query": [
+								{
+									"key": "state",
+									"value": "CA",
+									"description": "Two-letter state code"
+								},
+								{
+									"key": "chamber",
+									"value": "House",
+									"description": "House or Senate"
+								},
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}"
+								}
+							]
+						},
+						"description": "Fetch members filtered by state and chamber."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Member by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has member object\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.member).to.exist;",
+									"    pm.expect(jsonData.member.bioguideId).to.be.a('string');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/members/:bioguideId",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["members", ":bioguideId"],
+							"variable": [
+								{
+									"key": "bioguideId",
+									"value": "B000944",
+									"description": "Bioguide ID (e.g., B000944 for Sherrod Brown)"
+								}
+							]
+						},
+						"description": "Fetch detailed information about a specific Congress member."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Member Sponsored Legislation",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/members/:bioguideId/sponsored-legislation",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["members", ":bioguideId", "sponsored-legislation"],
+							"variable": [
+								{
+									"key": "bioguideId",
+									"value": "B000944"
+								}
+							]
+						},
+						"description": "Fetch bills sponsored by a specific Congress member."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for querying Congress members"
+		},
+		{
+			"name": "Committees",
+			"item": [
+				{
+					"name": "List Committees",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has committees array\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.committees).to.be.an('array');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/committees?limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["committees"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}"
+								},
+								{
+									"key": "chamber",
+									"value": "House",
+									"disabled": true
+								}
+							]
+						},
+						"description": "Fetch a list of Congressional committees."
+					},
+					"response": []
+				},
+				{
+					"name": "List House Committees",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/committees?chamber=House&limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["committees"],
+							"query": [
+								{
+									"key": "chamber",
+									"value": "House"
+								},
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}"
+								}
+							]
+						},
+						"description": "Fetch House committees only."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Committee by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has committee object\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.committee).to.exist;",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/committees/:chamber/:systemCode",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["committees", ":chamber", ":systemCode"],
+							"variable": [
+								{
+									"key": "chamber",
+									"value": "House",
+									"description": "House or Senate"
+								},
+								{
+									"key": "systemCode",
+									"value": "hsag00",
+									"description": "Committee system code"
+								}
+							]
+						},
+						"description": "Fetch detailed information about a specific committee."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for querying Congressional committees"
+		},
+		{
+			"name": "Nominations",
+			"item": [
+				{
+					"name": "List Nominations",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has nominations array\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.nominations).to.be.an('array');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/nominations?congress={{congress}}&limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["nominations"],
+							"query": [
+								{
+									"key": "congress",
+									"value": "{{congress}}"
+								},
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}"
+								}
+							]
+						},
+						"description": "Fetch a list of Presidential nominations."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Nomination by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/nominations/:congress/:number",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["nominations", ":congress", ":number"],
+							"variable": [
+								{
+									"key": "congress",
+									"value": "118"
+								},
+								{
+									"key": "number",
+									"value": "PN100"
+								}
+							]
+						},
+						"description": "Fetch detailed information about a specific nomination."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for querying Presidential nominations"
+		},
+		{
+			"name": "Hearings",
+			"item": [
+				{
+					"name": "List Hearings",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 200\", function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test(\"Response has hearings array\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.hearings).to.be.an('array');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{apiBaseUrl}}/hearings?congress={{congress}}&chamber=House&limit={{defaultLimit}}",
+							"host": ["{{apiBaseUrl}}"],
+							"path": ["hearings"],
+							"query": [
+								{
+									"key": "congress",
+									"value": "{{congress}}"
+								},
+								{
+									"key": "chamber",
+									"value": "House"
+								},
+								{
+									"key": "limit",
+									"value": "{{defaultLimit}}"
+								}
+							]
+						},
+						"description": "Fetch a list of Congressional hearings."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for querying Congressional hearings"
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "apiBaseUrl",
+			"value": "{{baseUrl}}/api",
+			"type": "string"
+		},
+		{
+			"key": "congress",
+			"value": "118",
+			"type": "string"
+		},
+		{
+			"key": "defaultLimit",
+			"value": "5",
+			"type": "string"
+		}
+	]
+}
