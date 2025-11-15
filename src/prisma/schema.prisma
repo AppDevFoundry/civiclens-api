@@ -53,6 +53,9 @@ model User {
   following  User[]    @relation("UserFollows")
   comments   Comment[]
   demo       Boolean   @default(false)
+  watchlists UserWatchlist[]
+  notificationPreferences UserNotificationPreferences?
+  notificationHistory     NotificationHistory[]
 }
 
 // ============================================================================
@@ -88,6 +91,16 @@ model Bill {
   lawNumber          String?
   isLaw              Boolean   @default(false)
 
+  // Sync tracking
+  lastSyncedAt       DateTime?
+  syncAttempts       Int       @default(0)
+  lastChangedAt      DateTime?
+  priority           Int       @default(5) // 1-10, for sync prioritization
+
+  // Enrichment tracking
+  lastEnrichedAt     DateTime?
+  enrichmentAttempts Int       @default(0)
+
   // Metadata
   congressGovUrl     String?
   apiResponseData    Json?     // Store full API response for reference
@@ -95,12 +108,22 @@ model Bill {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  // Relations
+  changeLogs         BillChangeLog[]
+  watchlists         UserWatchlist[]
+  summary            BillSummary?
+  relatedBills       BillRelationship[] @relation("SourceBills")
+  relatedFrom        BillRelationship[] @relation("TargetBills")
+  notificationHistory NotificationHistory[]
+
   // Composite unique constraint for Congress.gov bills
   @@unique([congress, billType, billNumber])
   @@index([congress, billType])
   @@index([sponsorBioguideId])
   @@index([updateDate])
   @@index([introducedDate])
+  @@index([lastSyncedAt])
+  @@index([priority])
 }
 
 /// Members of Congress
@@ -141,6 +164,10 @@ model Member {
 
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+
+  // Relations
+  watchlists         UserWatchlist[]
+  notificationHistory NotificationHistory[]
 
   @@index([state])
   @@index([party])
@@ -238,4 +265,243 @@ model Hearing {
   @@index([chamber])
   @@index([date])
   @@index([committeeSystemCode])
+}
+
+// ============================================================================
+// Sync & Change Tracking Models
+// ============================================================================
+
+/// Track all sync executions for observability
+model SyncRun {
+  id                  Int       @id @default(autoincrement())
+  resourceType        String    // "bills", "members", "hearings", "committees", "nominations"
+  status              String    // "queued", "running", "completed", "failed", "partial"
+  startedAt           DateTime  @default(now())
+  completedAt         DateTime?
+  recordsFetched      Int       @default(0)
+  recordsCreated      Int       @default(0)
+  recordsUpdated      Int       @default(0)
+  recordsUnchanged    Int       @default(0)
+  errorsEncountered   Json?     // Array of error objects
+  cursor              Json?     // Resume token for pagination
+  metadata            Json?     // Flexible stats (API calls, rate limits, etc.)
+
+  @@index([resourceType, startedAt])
+  @@index([status, startedAt])
+}
+
+/// Job queue for background processing
+model SyncJob {
+  id              Int       @id @default(autoincrement())
+  jobType         String    // "sync_bills", "sync_member", "sync_hearing", "generate_summary"
+  payload         Json      // Job parameters (congress, dateRange, billId, etc.)
+  status          String    @default("pending") // "pending", "processing", "completed", "failed"
+  priority        Int       @default(5) // 1-10, higher = more important
+  attempts        Int       @default(0)
+  maxAttempts     Int       @default(3)
+  scheduledFor    DateTime  @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  error           String?   @db.Text
+  result          Json?     // Job result data
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, scheduledFor, priority])
+  @@index([jobType, status])
+  @@index([createdAt])
+}
+
+/// Track changes to bills for notifications
+model BillChangeLog {
+  id            Int      @id @default(autoincrement())
+  billId        Int
+  bill          Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  changeType    String   // "status", "action", "cosponsors", "summary", "title"
+  previousValue Json?    // Old value (flexible structure)
+  newValue      Json?    // New value (flexible structure)
+  detectedAt    DateTime @default(now())
+  notified      Boolean  @default(false)
+
+  @@index([billId, detectedAt])
+  @@index([notified, detectedAt])
+  @@index([changeType, detectedAt])
+}
+
+// ============================================================================
+// User Engagement Models
+// ============================================================================
+
+/// User watchlists for bills, members, and topics
+model UserWatchlist {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // What they're watching (one of these will be set)
+  billId          Int?
+  bill            Bill?     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  memberId        Int?
+  member          Member?   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  topicKeyword    String?   // e.g., "privacy", "healthcare", "AI"
+
+  // Notification preferences
+  notifyOnStatus      Boolean @default(true)
+  notifyOnActions     Boolean @default(true)
+  notifyOnCosponsors  Boolean @default(false)
+  digestMode          Boolean @default(false) // Daily digest vs real-time
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  lastNotifiedAt  DateTime?
+
+  @@unique([userId, billId])
+  @@unique([userId, memberId])
+  @@index([userId, topicKeyword])
+  @@index([billId])
+  @@index([memberId])
+}
+
+/// User notification preferences (global settings)
+model UserNotificationPreferences {
+  id                    Int      @id @default(autoincrement())
+  userId                Int      @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Global notification settings
+  emailEnabled          Boolean  @default(true)
+  emailAddress          String?  // Override user.email if set
+  digestFrequency       String   @default("daily") // "instant", "daily", "weekly", "never"
+  digestTime            String   @default("08:00") // "HH:MM" format (user's timezone)
+  timezone              String   @default("America/New_York")
+
+  // Unsubscribe
+  unsubscribeToken      String   @unique @default(uuid())
+  unsubscribedAt        DateTime?
+
+  // Email verification
+  emailVerified         Boolean  @default(false)
+  emailVerificationToken String?  @unique
+  emailVerifiedAt       DateTime?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([emailEnabled])
+  @@index([unsubscribeToken])
+}
+
+/// Track notification history
+model NotificationHistory {
+  id                Int      @id @default(autoincrement())
+  userId            Int
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Notification details
+  notificationType  String   // "bill_change", "member_update", "digest"
+  subject           String
+  body              String   @db.Text
+
+  // Related entities
+  billId            Int?
+  bill              Bill?    @relation(fields: [billId], references: [id], onDelete: SetNull)
+  memberId          Int?
+  member            Member?  @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  changeLogId       Int?
+
+  // Delivery details
+  deliveryMethod    String   @default("email") // "email", "push", "sms"
+  recipientEmail    String
+  status            String   @default("pending") // "pending", "sent", "failed", "bounced"
+  sentAt            DateTime?
+  failedAt          DateTime?
+  error             String?
+
+  // Engagement tracking
+  opened            Boolean  @default(false)
+  openedAt          DateTime?
+  clicked           Boolean  @default(false)
+  clickedAt         DateTime?
+
+  createdAt         DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([notificationType])
+  @@index([billId])
+}
+
+// ============================================================================
+// AI Enhancement Models
+// ============================================================================
+
+/// AI-generated plain-language summaries for bills
+model BillSummary {
+  id                    Int      @id @default(autoincrement())
+  billId                Int      @unique
+  bill                  Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  plainLanguageSummary  String   @db.Text // "In plain English: ..."
+  keyPoints             Json     // Array of bullet points
+  stakeholders          Json?    // Array of affected groups
+  controversy           String?  @db.Text // Key points of debate
+  complexityScore       Int?     // 1-10, how technical/specialized
+
+  generatedAt           DateTime @default(now())
+  generatedBy           String   // "gpt-4", "claude-3-5-sonnet", etc.
+  tokensUsed            Int?
+  cost                  Float?   // USD cost of generation
+
+  @@index([generatedAt])
+  @@index([complexityScore])
+}
+
+/// Relationships between bills for insights
+model BillRelationship {
+  id                Int    @id @default(autoincrement())
+  sourceBillId      Int
+  targetBillId      Int
+  relationshipType  String // "companion", "related", "supersedes", "amends", "similar"
+
+  sourceBill        Bill   @relation("SourceBills", fields: [sourceBillId], references: [id], onDelete: Cascade)
+  targetBill        Bill   @relation("TargetBills", fields: [targetBillId], references: [id], onDelete: Cascade)
+
+  confidence        Float? // 0-1, if detected via ML/similarity
+  source            String @default("congress_api") // "congress_api", "detected", "manual"
+  metadata          Json?  // Additional relationship context
+
+  createdAt         DateTime @default(now())
+
+  @@unique([sourceBillId, targetBillId, relationshipType])
+  @@index([sourceBillId])
+  @@index([targetBillId])
+  @@index([relationshipType])
+}
+
+// ============================================================================
+// Error Tracking Models
+// ============================================================================
+
+/// Tracks sync errors for monitoring and debugging
+model SyncError {
+  id          Int      @id @default(autoincrement())
+  errorType   String   // "retryable", "fatal", "transient", etc.
+  severity    String   // "low", "medium", "high", "critical"
+  message     String
+  stackTrace  String?  @db.Text
+  context     Json?    // Additional error context
+  shouldAlert Boolean  @default(false)
+  alerted     Boolean  @default(false)
+  alertedAt   DateTime?
+  resolved    Boolean  @default(false)
+  resolvedAt  DateTime?
+  resolvedBy  String?  // User who marked as resolved
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([errorType])
+  @@index([severity])
+  @@index([createdAt])
+  @@index([shouldAlert, alerted])
 }

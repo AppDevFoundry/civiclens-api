@@ -31,6 +31,8 @@ DATABASE_URL=
 JWT_SECRET=
 NODE_ENV=production
 CONGRESS_API_KEY=
+CRON_SECRET=             # For Vercel cron authentication (production)
+ADMIN_SECRET=            # For admin dashboard authentication (production)
 ```
 
 #### Congress.gov API Configuration
@@ -414,6 +416,100 @@ Configuration parameters:
 - `retryAttempts`: 3
 - `retryDelay`: 1000ms (exponential backoff)
 - `defaultLimit`: 20 results per page
+
+## Congress Sync System
+
+CivicLens includes a comprehensive data synchronization system that automatically keeps Congressional data up-to-date.
+
+### Features
+
+- **Automated Syncing**: Vercel cron jobs run hourly/daily to fetch updates
+- **Change Detection**: Tracks bill status changes, new actions, and cosponsor updates
+- **User Watchlists**: Users can follow bills, members, and topics for personalized notifications
+- **Admin Dashboard**: Monitor sync health, data coverage, and error logs
+- **Rate Limit Management**: Stays under Congress.gov's 5,000 req/hour limit
+- **Manual Sync CLI**: Run syncs on-demand for development and maintenance
+
+### Quick Start
+
+```bash
+# Run initial data sync (30 days of bills)
+npm run sync:bills
+
+# Sync members of Congress
+npm run sync:members
+
+# Check sync status
+npm run sync:status
+```
+
+### API Endpoints
+
+#### Watchlist
+```http
+GET    /api/watchlist                      # Get user's watchlist
+POST   /api/watchlist/bill/:billId         # Add bill to watchlist
+POST   /api/watchlist/member/:memberId     # Add member to watchlist
+POST   /api/watchlist/topic                # Add topic keyword
+DELETE /api/watchlist/:id                  # Remove from watchlist
+PATCH  /api/watchlist/:id                  # Update preferences
+```
+
+#### Admin Dashboard
+```http
+GET    /api/admin/dashboard                # Overview of sync system
+GET    /api/admin/sync-status              # Sync health metrics
+GET    /api/admin/coverage                 # Data coverage stats
+GET    /api/admin/errors                   # Error logs
+POST   /api/admin/trigger-sync             # Manual sync trigger
+```
+
+#### Cron (Vercel Auto-Scheduled)
+```http
+POST   /api/cron/sync-bills                # Hourly bill sync
+POST   /api/cron/sync-members              # 6-hour member sync
+POST   /api/cron/sync-hearings             # 8-hour hearing sync
+POST   /api/cron/sync-stale                # Daily stale data refresh
+```
+
+### Sync Strategies
+
+- **Incremental** (default): Last 30 days, keeps recent data fresh
+- **Stale**: Refreshes bills not synced in 48 hours
+- **Priority**: Last 90 days of active legislation
+- **Full**: Complete refresh of current Congress
+
+```bash
+# Examples
+npm run sync:bills -- --strategy=full
+npm run sync:all -- --strategy=incremental
+```
+
+### Change Detection
+
+The system automatically tracks:
+- Bill status changes (Introduced → Committee → Floor → Law)
+- New legislative actions
+- Cosponsor additions/removals
+- Title changes
+- Policy area updates
+
+Changes are logged in `BillChangeLog` for future notification delivery.
+
+### Deployment
+
+On Vercel, the cron jobs are configured via `vercel.json` and run automatically. Ensure these environment variables are set:
+
+```bash
+CRON_SECRET=random_secret       # Authenticate cron requests
+ADMIN_SECRET=random_secret      # Authenticate admin endpoints
+```
+
+### Documentation
+
+For complete documentation, see:
+- **[Congress Sync System Guide](docs/CONGRESS_SYNC_SYSTEM.md)** - Full implementation details
+- **[Project Roadmap](docs/PROJECT_OVERVIEW_AND_ROADMAP.md)** - Feature roadmap and vision
 
 ### Additional Resources
 
