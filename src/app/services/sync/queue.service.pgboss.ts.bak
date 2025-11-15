@@ -1,0 +1,371 @@
+/**
+ * Queue Service - PostgreSQL-based job queue using pg-boss
+ *
+ * Provides a simple interface for enqueueing and processing background jobs.
+ * Uses pg-boss which stores jobs in PostgreSQL tables.
+ */
+
+import { PgBoss } from 'pg-boss';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+/**
+ * Job types that can be enqueued
+ */
+export enum JobType {
+  SYNC_BILLS = 'sync_bills',
+  SYNC_MEMBER = 'sync_member',
+  SYNC_HEARING = 'sync_hearing',
+  SYNC_COMMITTEE = 'sync_committee',
+  SYNC_NOMINATION = 'sync_nomination',
+  GENERATE_SUMMARY = 'generate_summary',
+}
+
+/**
+ * Job payload types
+ */
+export interface SyncBillsJobPayload {
+  congress?: number;
+  billType?: string;
+  dateFrom?: string; // ISO date
+  dateTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SyncMemberJobPayload {
+  bioguideId?: string;
+  currentMember?: boolean;
+  state?: string;
+  limit?: number;
+}
+
+export interface SyncHearingJobPayload {
+  congress?: number;
+  chamber?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+}
+
+export interface GenerateSummaryJobPayload {
+  billId: number;
+  force?: boolean; // Regenerate even if exists
+}
+
+export type JobPayload =
+  | SyncBillsJobPayload
+  | SyncMemberJobPayload
+  | SyncHearingJobPayload
+  | GenerateSummaryJobPayload;
+
+/**
+ * Job options for enqueueing
+ */
+export interface JobOptions {
+  priority?: number; // 1-10, higher = more important
+  retryLimit?: number; // Max retry attempts
+  retryDelay?: number; // Seconds between retries
+  retryBackoff?: boolean; // Use exponential backoff
+  startAfter?: Date | string; // Schedule job for later
+  expireInSeconds?: number; // Job expires if not started
+  singletonKey?: string; // Only one job with this key can be active
+}
+
+/**
+ * QueueService - Wrapper around pg-boss for job queue management
+ */
+export class QueueService {
+  private boss: PgBoss | null = null;
+  private isStarted = false;
+
+  /**
+   * Initialize and start the queue
+   */
+  async start(): Promise<void> {
+    if (this.isStarted) {
+      console.log('[QueueService] Already started');
+      return;
+    }
+
+    try {
+      // Initialize pg-boss with database connection
+      this.boss = new PgBoss({
+        connectionString: process.env.DATABASE_URL,
+        // pg-boss config
+        retryLimit: 3,
+        retryDelay: 60, // seconds
+        retryBackoff: true,
+        expireInHours: 24,
+        retentionDays: 7, // Keep completed jobs for 7 days
+        deleteAfterDays: 30, // Delete old jobs after 30 days
+        monitorStateIntervalSeconds: 60,
+        // Performance tuning
+        newJobCheckInterval: 1000, // Check for new jobs every second
+
+        newJobCheckIntervalSeconds: undefined,
+      });
+
+      await this.boss.start();
+      this.isStarted = true;
+      console.log('[QueueService] Started successfully');
+    } catch (error) {
+      console.error('[QueueService] Failed to start:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Stop the queue gracefully
+   */
+  async stop(): Promise<void> {
+    if (!this.boss || !this.isStarted) {
+      return;
+    }
+
+    try {
+      await this.boss.stop();
+      this.isStarted = false;
+      console.log('[QueueService] Stopped successfully');
+    } catch (error) {
+      console.error('[QueueService] Failed to stop:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Enqueue a job
+   */
+  async enqueue<T extends JobPayload>(
+    jobType: JobType,
+    payload: T,
+    options?: JobOptions
+  ): Promise<string | null> {
+    this.assertStarted();
+
+    try {
+      const jobId = await this.boss!.send(
+        jobType,
+        payload,
+        {
+          priority: options?.priority,
+          retryLimit: options?.retryLimit,
+          retryDelay: options?.retryDelay,
+          retryBackoff: options?.retryBackoff,
+          startAfter: options?.startAfter,
+          expireInSeconds: options?.expireInSeconds,
+          singletonKey: options?.singletonKey,
+        }
+      );
+
+      console.log(`[QueueService] Enqueued job: ${jobType} (${jobId})`);
+
+      // Also track in Prisma SyncJob table for admin dashboard
+      await prisma.syncJob.create({
+        data: {
+          jobType,
+          payload: payload as any,
+          priority: options?.priority || 5,
+          maxAttempts: options?.retryLimit || 3,
+          scheduledFor: options?.startAfter ? new Date(options.startAfter) : new Date(),
+          status: 'pending',
+        },
+      });
+
+      return jobId;
+    } catch (error) {
+      console.error(`[QueueService] Failed to enqueue job: ${jobType}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Register a job handler
+   */
+  async registerHandler<T extends JobPayload>(
+    jobType: JobType,
+    handler: (payload: T) => Promise<void>,
+    options?: {
+      teamSize?: number; // Number of concurrent workers
+      teamConcurrency?: number; // Jobs per worker
+    }
+  ): Promise<void> {
+    this.assertStarted();
+
+    await this.boss!.work(
+      jobType,
+      {
+        teamSize: options?.teamSize || 1,
+        teamConcurrency: options?.teamConcurrency || 1,
+      },
+      async (job) => {
+        const startTime = Date.now();
+        console.log(`[QueueService] Processing job: ${jobType} (${job.id})`);
+
+        // Update Prisma SyncJob status
+        const syncJob = await prisma.syncJob.findFirst({
+          where: {
+            jobType,
+            payload: job.data as any,
+            status: 'pending',
+          },
+        });
+
+        if (syncJob) {
+          await prisma.syncJob.update({
+            where: { id: syncJob.id },
+            data: {
+              status: 'processing',
+              startedAt: new Date(),
+              attempts: syncJob.attempts + 1,
+            },
+          });
+        }
+
+        try {
+          await handler(job.data as T);
+
+          const duration = Date.now() - startTime;
+          console.log(`[QueueService] Completed job: ${jobType} (${job.id}) in ${duration}ms`);
+
+          // Update Prisma SyncJob status
+          if (syncJob) {
+            await prisma.syncJob.update({
+              where: { id: syncJob.id },
+              data: {
+                status: 'completed',
+                completedAt: new Date(),
+              },
+            });
+          }
+        } catch (error) {
+          const duration = Date.now() - startTime;
+          console.error(
+            `[QueueService] Failed job: ${jobType} (${job.id}) after ${duration}ms`,
+            error
+          );
+
+          // Update Prisma SyncJob status
+          if (syncJob) {
+            await prisma.syncJob.update({
+              where: { id: syncJob.id },
+              data: {
+                status: syncJob.attempts + 1 >= syncJob.maxAttempts ? 'failed' : 'pending',
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }
+
+          throw error; // Re-throw to let pg-boss handle retry
+        }
+      }
+    );
+
+    console.log(`[QueueService] Registered handler for: ${jobType}`);
+  }
+
+  /**
+   * Get queue statistics
+   */
+  async getQueueStats(): Promise<{
+    created: number;
+    retry: number;
+    active: number;
+    completed: number;
+    expired: number;
+    cancelled: number;
+    failed: number;
+  }> {
+    this.assertStarted();
+
+    try {
+      // pg-boss doesn't have a direct stats API, so we query our Prisma table
+      const stats = await prisma.syncJob.groupBy({
+        by: ['status'],
+        _count: true,
+      });
+
+      const result = {
+        created: 0,
+        retry: 0,
+        active: 0,
+        completed: 0,
+        expired: 0,
+        cancelled: 0,
+        failed: 0,
+      };
+
+      stats.forEach((stat) => {
+        if (stat.status === 'pending') result.created = stat._count;
+        else if (stat.status === 'processing') result.active = stat._count;
+        else if (stat.status === 'completed') result.completed = stat._count;
+        else if (stat.status === 'failed') result.failed = stat._count;
+      });
+
+      return result;
+    } catch (error) {
+      console.error('[QueueService] Failed to get queue stats:', error);
+      return {
+        created: 0,
+        retry: 0,
+        active: 0,
+        completed: 0,
+        expired: 0,
+        cancelled: 0,
+        failed: 0,
+      };
+    }
+  }
+
+  /**
+   * Get recent jobs from Prisma
+   */
+  async getRecentJobs(limit = 50) {
+    return prisma.syncJob.findMany({
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Clear all jobs (for testing)
+   */
+  async clearAll(): Promise<void> {
+    this.assertStarted();
+    await this.boss!.clearStorage();
+    await prisma.syncJob.deleteMany();
+    console.log('[QueueService] Cleared all jobs');
+  }
+
+  /**
+   * Assert that the queue is started
+   */
+  private assertStarted(): void {
+    if (!this.isStarted || !this.boss) {
+      throw new Error('QueueService is not started. Call start() first.');
+    }
+  }
+}
+
+// Singleton instance
+let queueService: QueueService | null = null;
+
+/**
+ * Get the QueueService singleton instance
+ */
+export function getQueueService(): QueueService {
+  if (!queueService) {
+    queueService = new QueueService();
+  }
+  return queueService;
+}
+
+/**
+ * Initialize the queue service (call this on app startup)
+ */
+export async function initializeQueue(): Promise<QueueService> {
+  const service = getQueueService();
+  await service.start();
+  return service;
+}
