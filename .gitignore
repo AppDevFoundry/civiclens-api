@@ -40,3 +40,6 @@ testem.log
 Thumbs.db
 
 .nx/cache
+
+# Claude AI local settings (should not be committed)
+.claude/settings.local.json
