@@ -53,6 +53,10 @@ model User {
   following  User[]    @relation("UserFollows")
   comments   Comment[]
   demo       Boolean   @default(false)
+
+  // CivicLens subscriptions and notifications
+  subscriptions           UserSubscription[]
+  notificationDeliveries  NotificationDelivery[]
 }
 
 // ============================================================================
@@ -62,6 +66,7 @@ model User {
 /// Congressional bills and legislation
 model Bill {
   id                 Int       @id @default(autoincrement())
+  slug               String?   @unique // Format: "119-hr-1234" for easy URLs (nullable for migration)
   congress           Int
   billType           String    // hr, s, hjres, sjres, hconres, sconres, hres, sres
   billNumber         Int
@@ -76,24 +81,40 @@ model Bill {
   policyArea         String?
   constitutionalAuthorityStatementText String?
 
-  // Sponsor information
+  // Primary sponsor (kept for quick access, but also in cosponsors with isPrimarySponsor=true)
   sponsorBioguideId  String?
   sponsorFirstName   String?
   sponsorLastName    String?
   sponsorFullName    String?
   sponsorState       String?
   sponsorParty       String?
+  sponsor            Member?   @relation("BillSponsor", fields: [sponsorBioguideId], references: [bioguideId])
 
   // Status and tracking
   lawNumber          String?
   isLaw              Boolean   @default(false)
 
+  // URLs for deep linking to Congress.gov
+  congressGovUrl     String?   // Main bill page
+  pdfUrl             String?   // Full text PDF
+  textUrl            String?   // Full text plain text
+  xmlUrl             String?   // Full text XML
+
   // Metadata
-  congressGovUrl     String?
   apiResponseData    Json?     // Store full API response for reference
 
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+
+  // Relations
+  actions            BillAction[]
+  subjects           BillSubject[]
+  cosponsors         BillCosponsor[]
+  summaries          BillSummary[]
+  textVersions       BillTextVersion[]
+  insights           BillInsight[]
+  relatedBillsFrom   BillRelated[] @relation("RelatedBillFrom")
+  relatedBillsTo     BillRelated[] @relation("RelatedBillTo")
 
   // Composite unique constraint for Congress.gov bills
   @@unique([congress, billType, billNumber])
@@ -101,6 +122,8 @@ model Bill {
   @@index([sponsorBioguideId])
   @@index([updateDate])
   @@index([introducedDate])
+  @@index([policyArea])
+  @@index([isLaw])
 }
 
 /// Members of Congress
@@ -141,6 +164,10 @@ model Member {
 
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+
+  // Relations
+  sponsoredBills     Bill[]          @relation("BillSponsor")
+  cosponsoredBills   BillCosponsor[]
 
   @@index([state])
   @@index([party])
@@ -238,4 +265,286 @@ model Hearing {
   @@index([chamber])
   @@index([date])
   @@index([committeeSystemCode])
+}
+
+// ============================================================================
+// Bill Detail Models
+// ============================================================================
+
+/// Legislative actions/history for a bill
+model BillAction {
+  id              Int       @id @default(autoincrement())
+  bill            Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId          Int
+
+  actionCode      String?   // e.g., "H11100", "1000"
+  actionDate      DateTime
+  text            String    // Description of the action
+  type            String?   // e.g., "IntroReferral", "Floor"
+  actionTime      String?   // Time of day if available
+  chamber         String?   // House, Senate
+
+  // Source system info
+  sourceSystemCode Int?
+  sourceSystemName String?
+
+  // Committee references (stored as JSON array of {systemCode, name})
+  committees      Json?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([billId, actionDate, actionCode])
+  @@index([billId, actionDate(sort: Desc)])
+  @@index([actionCode])
+  @@index([chamber])
+}
+
+/// Subjects/topics for a bill
+model BillSubject {
+  id              Int       @id @default(autoincrement())
+  bill            Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId          Int
+
+  name            String    // Subject term (e.g., "Healthcare", "Medicare")
+  isPolicyArea    Boolean   @default(false) // True if this is the primary policy area
+
+  createdAt       DateTime  @default(now())
+
+  @@unique([billId, name])
+  @@index([billId])
+  @@index([name])
+  @@index([isPolicyArea])
+}
+
+/// Cosponsors of a bill (many-to-many with Member)
+model BillCosponsor {
+  id              Int       @id @default(autoincrement())
+  bill            Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId          Int
+  member          Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId        Int
+
+  isPrimarySponsor Boolean  @default(false) // True for the main sponsor
+  cosponsorDate   DateTime? // Date they became a cosponsor
+  isOriginalCosponsor Boolean @default(false)
+
+  createdAt       DateTime  @default(now())
+
+  @@unique([billId, memberId])
+  @@index([billId])
+  @@index([memberId])
+  @@index([isPrimarySponsor])
+}
+
+/// Related bills (companion, identical, etc.)
+model BillRelated {
+  id              Int       @id @default(autoincrement())
+  fromBill        Bill      @relation("RelatedBillFrom", fields: [fromBillId], references: [id], onDelete: Cascade)
+  fromBillId      Int
+  toBill          Bill      @relation("RelatedBillTo", fields: [toBillId], references: [id], onDelete: Cascade)
+  toBillId        Int
+
+  relationType    String    // e.g., "companion", "identical", "related"
+
+  createdAt       DateTime  @default(now())
+
+  @@unique([fromBillId, toBillId, relationType])
+  @@index([fromBillId])
+  @@index([toBillId])
+}
+
+/// Official CRS summaries for a bill
+model BillSummary {
+  id              Int       @id @default(autoincrement())
+  bill            Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId          Int
+
+  versionCode     String    // e.g., "00" for introduced version
+  actionDate      DateTime? // Date of this version
+  actionDesc      String?   // e.g., "Introduced in House"
+  text            String    // The actual summary text
+  updateDate      DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([billId, versionCode])
+  @@index([billId])
+  @@index([actionDate])
+}
+
+/// Text versions of a bill (links only, not content)
+model BillTextVersion {
+  id              Int       @id @default(autoincrement())
+  bill            Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId          Int
+
+  type            String    // e.g., "Introduced", "Reported in House", "Enrolled Bill"
+  date            DateTime?
+
+  // URLs to Congress.gov for different formats
+  pdfUrl          String?
+  txtUrl          String?
+  xmlUrl          String?
+  htmlUrl         String?
+
+  createdAt       DateTime  @default(now())
+
+  @@unique([billId, type, date])
+  @@index([billId])
+  @@index([date])
+}
+
+// ============================================================================
+// AI-Generated Content
+// ============================================================================
+
+/// AI-generated insights and summaries for bills
+model BillInsight {
+  id              Int       @id @default(autoincrement())
+  bill            Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId          Int
+
+  insightType     String    // PLAIN_SUMMARY, IMPACT_SUMMARY, KEY_PROVISIONS, CHANGE_DETECTION
+  content         String    // The generated text
+  generatedBy     String    // Model name and version (e.g., "gpt-4o-2024-08-06")
+
+  // Hash of source data to detect when regeneration is needed
+  sourceHash      String
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([billId, insightType])
+  @@index([billId])
+  @@index([insightType])
+  @@index([updatedAt])
+}
+
+// ============================================================================
+// Sync Infrastructure
+// ============================================================================
+
+/// Tracks sync job runs for auditing and cursor management
+model SyncJob {
+  id              Int       @id @default(autoincrement())
+
+  jobType         String    // MEMBER_SYNC, BILL_SYNC
+  status          String    // PENDING, RUNNING, COMPLETED, FAILED
+
+  // Cursor for incremental syncs
+  cursor          String?   // Last processed updateDate as ISO string
+
+  // Stats
+  recordsProcessed Int      @default(0)
+  recordsCreated  Int       @default(0)
+  recordsUpdated  Int       @default(0)
+  apiRequestsMade Int       @default(0)
+
+  // Timing
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  // Error tracking
+  errorMessage    String?
+  errorDetails    Json?
+
+  @@index([jobType])
+  @@index([status])
+  @@index([startedAt])
+}
+
+// ============================================================================
+// Subscription & Notification System
+// ============================================================================
+
+/// User subscriptions for alerts on bills, members, topics, keywords
+model UserSubscription {
+  id              Int       @id @default(autoincrement())
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          Int
+
+  // What to subscribe to
+  subscriptionType String   // BILL, MEMBER, TOPIC, KEYWORD, ACTIVITY_TYPE
+  targetValue     String    // billSlug, bioguideId, "Healthcare", "climate change", "IntroducedHouse"
+
+  // How to notify
+  channels        String[]  // Array of: PUSH, EMAIL, IN_APP
+  frequency       String    // IMMEDIATE, DAILY_DIGEST, WEEKLY_DIGEST
+
+  isActive        Boolean   @default(true)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  deliveries      NotificationDelivery[]
+
+  @@unique([userId, subscriptionType, targetValue])
+  @@index([userId])
+  @@index([subscriptionType])
+  @@index([targetValue])
+  @@index([isActive])
+}
+
+/// Events that can trigger notifications (generated during sync)
+model NotificationEvent {
+  id              Int       @id @default(autoincrement())
+
+  eventType       String    // BILL_INTRODUCED, BILL_ACTION, BILL_STATUS_CHANGE, MEMBER_SPONSORED
+
+  // Source of the event
+  sourceType      String    // BILL, MEMBER
+  sourceId        Int       // bill.id or member.id
+
+  // Data for rendering the notification
+  eventData       Json      // Structured data about what happened
+
+  // Values to match against subscriptions
+  // e.g., ["119-hr-1234", "A000001", "Healthcare", "Medicare", "climate"]
+  matchableValues String[]
+
+  // Prevent duplicate events
+  eventHash       String    @unique // Hash of eventType + sourceId + relevant data
+
+  createdAt       DateTime  @default(now())
+
+  deliveries      NotificationDelivery[]
+
+  @@index([eventType])
+  @@index([sourceType, sourceId])
+  @@index([createdAt])
+  @@index([matchableValues])
+}
+
+/// Tracks delivery of notifications to users
+model NotificationDelivery {
+  id              Int       @id @default(autoincrement())
+
+  event           NotificationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId         Int
+  subscription    UserSubscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscriptionId  Int
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          Int
+
+  channel         String    // PUSH, EMAIL, IN_APP
+  status          String    // PENDING, SENT, FAILED, READ
+
+  // For digest batching
+  scheduledFor    DateTime?
+  sentAt          DateTime?
+  readAt          DateTime?
+
+  // Error tracking
+  errorMessage    String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([eventId, subscriptionId, channel])
+  @@index([userId])
+  @@index([status])
+  @@index([scheduledFor])
+  @@index([channel])
 }

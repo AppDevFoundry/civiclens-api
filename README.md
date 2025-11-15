@@ -33,6 +33,25 @@ NODE_ENV=production
 CONGRESS_API_KEY=
 ```
 
+#### Congress Sync Configuration (Optional)
+
+For automated data sync from Congress.gov:
+
+```
+# Sync behavior
+CONGRESS_SYNC_ENABLED=true                    # Enable/disable sync (default: true)
+CONGRESS_SYNC_WINDOW_DAYS=14                  # Days to look back on first sync (default: 14)
+CONGRESS_SYNC_PAGE_SIZE=250                   # Bills per API page (default: 250)
+CONGRESS_SYNC_REQUEST_THRESHOLD=500           # Stop when this many requests remain (default: 500)
+
+# Vercel cron authentication
+CRON_SECRET=your_secure_cron_secret           # Required for production cron jobs
+
+# AI Insights (Phase 1b - optional)
+OPENAI_API_KEY=                               # For AI-generated summaries
+AI_MODEL=gpt-4o                               # Model for insights
+```
+
 #### Congress.gov API Configuration
 
 The application integrates with the [Congress.gov API](https://api.congress.gov/) to fetch legislative data. You must obtain an API key:
@@ -414,6 +433,261 @@ Configuration parameters:
 - `retryAttempts`: 3
 - `retryDelay`: 1000ms (exponential backoff)
 - `defaultLimit`: 20 results per page
+
+## CivicLens Data Sync System
+
+CivicLens includes an automated sync system that regularly fetches data from Congress.gov and stores it in your database. This enables fast querying, rich relationships between entities, and the foundation for user subscriptions and notifications.
+
+### Architecture Overview
+
+The sync system consists of:
+- **Member Sync**: Fetches all current members of Congress (~540 members, 2-3 API calls)
+- **Bill Sync**: Incrementally fetches updated bills with summaries, actions, subjects, cosponsors
+- **Event Generation**: Creates notification events for new bills and status changes
+- **Job Tracking**: Records all sync runs with stats and error logging
+
+### Running Syncs
+
+#### Manual Sync (Development)
+
+```bash
+# Sync all current members first
+curl -X POST http://localhost:3000/api/sync/members
+
+# Then sync bills
+curl -X POST http://localhost:3000/api/sync/bills
+
+# Check sync status
+curl http://localhost:3000/api/sync/status
+```
+
+#### Automated Sync (Production with Vercel)
+
+The project includes a `vercel.json` with cron configuration:
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/sync/bills",
+      "schedule": "0 * * * *"  // Hourly
+    }
+  ]
+}
+```
+
+For production, set the `CRON_SECRET` environment variable. Vercel will authenticate cron requests automatically.
+
+### Initial Data Population
+
+On first deployment:
+
+1. **Run member sync** to populate the Member table:
+   ```bash
+   curl -X POST https://your-app.vercel.app/api/sync/members \
+     -H "Authorization: Bearer $CRON_SECRET"
+   ```
+
+2. **Run bill sync** to populate bills with relations:
+   ```bash
+   curl -X POST https://your-app.vercel.app/api/sync/bills \
+     -H "Authorization: Bearer $CRON_SECRET"
+   ```
+
+The first bill sync will fetch bills from the last 14 days (configurable via `CONGRESS_SYNC_WINDOW_DAYS`).
+
+### Sync Endpoints
+
+```http
+# Trigger member sync
+POST /api/sync/members
+Authorization: Bearer <CRON_SECRET>
+
+# Trigger bill sync (main cron endpoint)
+POST /api/sync/bills
+Authorization: Bearer <CRON_SECRET>
+
+# Get sync status and stats
+GET /api/sync/status
+
+# Simple health check
+GET /api/sync/health
+```
+
+### Rate Limit Management
+
+Congress.gov allows 5,000 requests per hour. The sync system:
+- Tracks API requests made during each sync run
+- Stops automatically when approaching the limit (500 requests remaining by default)
+- Uses incremental sync with cursors to resume from where it left off
+
+## CivicLens Bills API
+
+The `/api/bills` endpoints provide access to synced Congressional bills with rich relationships. This is the primary API for CivicLens frontends.
+
+### Bill Endpoints
+
+```http
+# List bills with filtering and pagination
+GET /api/bills?congress=118&type=hr&topic=Healthcare&limit=20&cursor=<id>
+
+# Get bill details with all relations
+GET /api/bills/:slug
+# e.g., GET /api/bills/118-hr-1234
+
+# Get paginated actions for a bill
+GET /api/bills/:slug/actions?limit=50&cursor=<id>
+
+# Get all cosponsors
+GET /api/bills/:slug/cosponsors?limit=100
+```
+
+### Query Parameters
+
+For `GET /api/bills`:
+- `congress` - Filter by congress number (e.g., 118)
+- `type` - Filter by bill type (hr, s, hjres, sjres, hconres, sconres, hres, sres)
+- `topic` - Filter by subject/policy area
+- `member` - Filter by sponsor/cosponsor bioguide ID
+- `search` - Search in title and subjects
+- `isLaw` - Filter to only show bills that became law
+- `cursor` - Pagination cursor (bill ID)
+- `limit` - Results per page (default 20, max 100)
+
+### Response Format
+
+Bill list response:
+```json
+{
+  "bills": [
+    {
+      "id": 123,
+      "slug": "118-hr-1234",
+      "congress": 118,
+      "type": "hr",
+      "number": 1234,
+      "title": "Example Bill Title",
+      "introducedDate": "2024-01-15T00:00:00.000Z",
+      "updateDate": "2024-01-20T00:00:00.000Z",
+      "latestActionDate": "2024-01-20T00:00:00.000Z",
+      "latestActionText": "Referred to the Committee on...",
+      "policyArea": "Healthcare",
+      "isLaw": false,
+      "sponsor": {
+        "bioguideId": "A000001",
+        "name": "John Smith",
+        "party": "D",
+        "state": "CA"
+      },
+      "cosponsorsCount": 25,
+      "actionsCount": 5,
+      "links": {
+        "congressGov": "https://congress.gov/bill/118th/hr/1234"
+      }
+    }
+  ],
+  "pagination": {
+    "total": 150,
+    "nextCursor": "122",
+    "hasMore": true
+  }
+}
+```
+
+Bill detail response includes:
+```json
+{
+  "bill": {
+    "id": 123,
+    "slug": "118-hr-1234",
+    // ... basic fields ...
+
+    "insights": {
+      "plainSummary": "AI-generated plain language summary...",
+      "impactSummary": "Who this affects...",
+      "keyProvisions": "Main points...",
+      "generatedAt": "2024-01-20T10:30:00.000Z"
+    },
+
+    "officialSummary": "CRS official summary text...",
+
+    "links": {
+      "congressGov": "https://congress.gov/bill/...",
+      "fullTextPdf": "https://...",
+      "fullTextTxt": "https://...",
+      "fullTextXml": "https://..."
+    },
+
+    "subjects": ["Healthcare", "Medicare", "Medicaid"],
+
+    "actions": [
+      {
+        "actionCode": "H11100",
+        "actionDate": "2024-01-20T00:00:00.000Z",
+        "text": "Referred to the Committee on...",
+        "type": "IntroReferral",
+        "chamber": "House"
+      }
+    ],
+
+    "cosponsors": [
+      {
+        "bioguideId": "B000002",
+        "name": "Jane Doe",
+        "party": "R",
+        "state": "TX",
+        "chamber": "House",
+        "cosponsorDate": "2024-01-16T00:00:00.000Z",
+        "isOriginalCosponsor": true
+      }
+    ],
+
+    "textVersions": [
+      {
+        "type": "Introduced",
+        "date": "2024-01-15T00:00:00.000Z",
+        "pdfUrl": "https://...",
+        "txtUrl": "https://...",
+        "xmlUrl": "https://...",
+        "htmlUrl": "https://..."
+      }
+    ]
+  }
+}
+```
+
+## CivicLens Members API
+
+```http
+# List members
+GET /api/members?state=CA&party=D&chamber=House&current=true&search=Smith&limit=50
+
+# Get member details with recent bills
+GET /api/members/:bioguideId
+
+# Get member's sponsored or cosponsored bills
+GET /api/members/:bioguideId/bills?type=sponsored&limit=20
+GET /api/members/:bioguideId/bills?type=cosponsored&limit=20
+```
+
+## Subscription & Notification System (Infrastructure Ready)
+
+The database schema includes tables for a powerful subscription system:
+
+- **UserSubscription**: Users can subscribe to bills, members, topics, keywords, or activity types
+- **NotificationEvent**: Events generated during sync (new bills, status changes)
+- **NotificationDelivery**: Track delivery status across channels (push, email, in-app)
+
+The sync system already generates notification events. Frontend integration for managing subscriptions and sending notifications will be added in Phase 2.
+
+### Subscription Types
+
+Users will be able to subscribe to:
+- **BILL**: Specific bill by slug (e.g., "118-hr-1234")
+- **MEMBER**: Member by bioguideId (e.g., "A000001")
+- **TOPIC**: Policy area or subject (e.g., "Healthcare")
+- **KEYWORD**: Any keyword in bill titles
+- **ACTIVITY_TYPE**: Type of action (e.g., "IntroducedHouse", "PassedSenate")
 
 ### Additional Resources
 

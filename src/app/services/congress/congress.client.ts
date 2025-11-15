@@ -53,6 +53,11 @@ export class CongressApiClient {
           format: config.params?.format || congressConfig.defaultFormat
         };
 
+        // Debug: log the full URL being requested
+        const url = new URL(config.url || '', config.baseURL);
+        const params = new URLSearchParams(config.params);
+        console.log(`[congress-api] Request: ${url.pathname}?${params.toString().replace(/api_key=[^&]+/, 'api_key=***')}`);
+
         return config;
       },
       (error) => {
@@ -127,6 +132,9 @@ export class CongressApiClient {
       // Server responded with error status
       const status = error.response.status;
       const data = error.response.data as any;
+
+      // Debug: log the full error response
+      console.log(`[congress-api] Error ${status}:`, JSON.stringify(data, null, 2));
 
       let message = 'Congress.gov API request failed';
       let detail: string | undefined;
@@ -328,9 +336,10 @@ export class CongressApiClient {
 
   /**
    * Format date for Congress.gov API (YYYY-MM-DDTHH:mm:ssZ)
+   * Note: Congress.gov API does not accept milliseconds
    */
   formatApiDate(date: Date): string {
-    return date.toISOString();
+    return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
   }
 
   /**

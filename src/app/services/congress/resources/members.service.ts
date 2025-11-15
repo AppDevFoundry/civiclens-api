@@ -134,51 +134,137 @@ export const searchCachedMembers = async (query: {
 // Database Caching Helpers
 // ============================================================================
 
+/**
+ * Parse member name in "Last, First Middle Suffix" format
+ */
+function parseMemberName(name: string | undefined): {
+  firstName: string | null;
+  lastName: string | null;
+  middleName: string | null;
+  suffix: string | null;
+  fullName: string | null;
+} {
+  if (!name) {
+    return { firstName: null, lastName: null, middleName: null, suffix: null, fullName: null };
+  }
+
+  // Handle "Last, First Middle Suffix" format
+  const parts = name.split(',').map(s => s.trim());
+  const lastName = parts[0] || null;
+
+  let firstName: string | null = null;
+  let middleName: string | null = null;
+  let suffix: string | null = null;
+
+  if (parts[1]) {
+    const nameParts = parts[1].split(' ').filter(Boolean);
+    firstName = nameParts[0] || null;
+
+    // Check if last part is a suffix
+    const lastPart = nameParts[nameParts.length - 1];
+    const suffixes = ['Jr.', 'Sr.', 'II', 'III', 'IV', 'V'];
+    if (nameParts.length > 1 && suffixes.some(s => lastPart?.includes(s))) {
+      suffix = lastPart;
+      middleName = nameParts.slice(1, -1).join(' ') || null;
+    } else if (nameParts.length > 1) {
+      middleName = nameParts.slice(1).join(' ') || null;
+    }
+  }
+
+  // Construct readable full name (First Last)
+  const fullName = firstName && lastName ? `${firstName} ${lastName}` : name;
+
+  return { firstName, lastName, middleName, suffix, fullName };
+}
+
+/**
+ * Map party abbreviation from party name
+ */
+function getPartyAbbreviation(partyName: string | undefined): string | null {
+  if (!partyName) return null;
+  const lower = partyName.toLowerCase();
+  if (lower.includes('democratic')) return 'D';
+  if (lower.includes('republican')) return 'R';
+  if (lower.includes('independent')) return 'I';
+  return partyName.charAt(0).toUpperCase();
+}
+
 async function cacheMember(member: Member | MemberDetail): Promise<void> {
   try {
+    // Parse name from "Last, First" format (list API returns this in .name)
+    // Detail API returns .directOrderName in "First Last" format
+    const parsedName = parseMemberName((member as any).name);
+
+    // Helper to title case names (API sometimes returns UPPERCASE)
+    const titleCase = (str: string | null | undefined): string | null => {
+      if (!str) return null;
+      return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    };
+
+    // Extract fields that might be in different locations
+    const imageUrl = (member as any).depiction?.imageUrl || member.depictionImageUrl || null;
+    const partyName = (member as any).partyName || member.partyHistory?.[0]?.partyName || null;
+    const party = member.party || getPartyAbbreviation(partyName);
+
+    // Get names - prefer existing firstName/lastName if available (detail API)
+    // Otherwise use parsed name from "Last, First" format (list API)
+    const firstName = titleCase(member.firstName) || parsedName.firstName;
+    const lastName = titleCase(member.lastName) || parsedName.lastName;
+    const middleName = titleCase(member.middleName) || parsedName.middleName;
+    const suffix = member.suffix || parsedName.suffix;
+
+    // Build full name from best available source
+    let fullName: string | null = null;
+    if (firstName && lastName) {
+      fullName = `${firstName} ${lastName}`;
+    } else if ((member as any).directOrderName) {
+      fullName = (member as any).directOrderName;
+    } else if ((member as any).name) {
+      fullName = parsedName.fullName;
+    }
+
+    // Get chamber from terms if not directly available
+    let chamber = member.chamber || null;
+    if (!chamber && (member as any).terms?.item?.[0]?.chamber) {
+      const chamberFull = (member as any).terms.item[0].chamber;
+      if (chamberFull.includes('House')) chamber = 'House';
+      else if (chamberFull.includes('Senate')) chamber = 'Senate';
+    }
+
+    // Handle district - store as integer
+    const district = member.district ? parseInt(String(member.district), 10) : null;
+
+    const memberData = {
+      firstName,
+      middleName,
+      lastName,
+      fullName,
+      nickName: member.nickName || null,
+      suffix,
+      state: member.state || null,
+      district,
+      party,
+      partyName,
+      chamber,
+      isCurrent: true,
+      officialWebsiteUrl: member.officialWebsiteUrl || null,
+      imageUrl,
+      birthYear: (member as MemberDetail).birthYear ? parseInt((member as MemberDetail).birthYear!) : null,
+      terms: member.terms ? (member.terms as any) : null,
+      apiResponseData: member as any,
+    };
+
     await prisma.member.upsert({
       where: {
         bioguideId: member.bioguideId
       },
       update: {
-        firstName: member.firstName || null,
-        middleName: member.middleName || null,
-        lastName: member.lastName || null,
-        fullName: member.name || member.firstName && member.lastName ? `${member.firstName} ${member.lastName}` : null,
-        nickName: member.nickName || null,
-        suffix: member.suffix || null,
-        state: member.state || null,
-        district: member.district || null,
-        party: member.party || null,
-        partyName: member.partyHistory?.[0]?.partyName || null,
-        chamber: member.chamber || null,
-        isCurrent: true,
-        officialWebsiteUrl: member.officialWebsiteUrl || null,
-        imageUrl: member.depictionImageUrl || null,
-        birthYear: (member as MemberDetail).birthYear ? parseInt((member as MemberDetail).birthYear!) : null,
-        terms: member.terms ? (member.terms as any) : null,
-        apiResponseData: member as any,
+        ...memberData,
         updatedAt: new Date()
       },
       create: {
         bioguideId: member.bioguideId,
-        firstName: member.firstName || null,
-        middleName: member.middleName || null,
-        lastName: member.lastName || null,
-        fullName: member.name || member.firstName && member.lastName ? `${member.firstName} ${member.lastName}` : null,
-        nickName: member.nickName || null,
-        suffix: member.suffix || null,
-        state: member.state || null,
-        district: member.district || null,
-        party: member.party || null,
-        partyName: member.partyHistory?.[0]?.partyName || null,
-        chamber: member.chamber || null,
-        isCurrent: true,
-        officialWebsiteUrl: member.officialWebsiteUrl || null,
-        imageUrl: member.depictionImageUrl || null,
-        birthYear: (member as MemberDetail).birthYear ? parseInt((member as MemberDetail).birthYear!) : null,
-        terms: member.terms ? (member.terms as any) : null,
-        apiResponseData: member as any
+        ...memberData
       }
     });
   } catch (error) {
