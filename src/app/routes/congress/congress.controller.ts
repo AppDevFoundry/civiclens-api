@@ -63,6 +63,7 @@ router.get('/bills', auth.optional, async (req: Request, res: Response, next: Ne
       pagination: result.pagination
     });
   } catch (error) {
+    console.error('[Congress API] /bills error:', error);
     next(error);
   }
 });

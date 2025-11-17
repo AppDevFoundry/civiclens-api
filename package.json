@@ -41,6 +41,7 @@
     "cors": "^2.8.5",
     "express": "~4.18.1",
     "express-jwt": "^8.4.1",
+    "firebase-admin": "^13.6.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^7.0.10",
     "pg-boss": "^12.2.0",
