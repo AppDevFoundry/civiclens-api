@@ -27,9 +27,29 @@ router.get('/watchlist', auth.required, async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Get all watchlist items
+    // Parse query parameters
+    const type = req.query.type as string | undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+    const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : 0;
+
+    // Build where clause
+    const where: any = { userId };
+
+    // Filter by type
+    if (type === 'bill') {
+      where.billId = { not: null };
+    } else if (type === 'member') {
+      where.memberId = { not: null };
+    } else if (type === 'topic') {
+      where.topicKeyword = { not: null };
+    }
+
+    // Get total count for pagination
+    const totalCount = await prisma.userWatchlist.count({ where });
+
+    // Get watchlist items with pagination
     const watchlist = await prisma.userWatchlist.findMany({
-      where: { userId },
+      where,
       include: {
         bill: {
           include: {
@@ -43,12 +63,17 @@ router.get('/watchlist', auth.required, async (req: Request, res: Response) => {
         member: true,
       },
       orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: offset,
     });
 
     // Transform to include unread change counts
     const watchlistWithChanges = watchlist.map((item) => ({
       id: item.id,
+      userId: item.userId,
       type: item.billId ? 'bill' : item.memberId ? 'member' : 'topic',
+      billId: item.billId,
+      memberId: item.memberId,
       bill: item.bill,
       member: item.member,
       topicKeyword: item.topicKeyword,
@@ -59,6 +84,10 @@ router.get('/watchlist', auth.required, async (req: Request, res: Response) => {
         notifyOnCosponsors: item.notifyOnCosponsors,
         digestMode: item.digestMode,
       },
+      notifyOnStatus: item.notifyOnStatus,
+      notifyOnActions: item.notifyOnActions,
+      notifyOnCosponsors: item.notifyOnCosponsors,
+      digestMode: item.digestMode,
       createdAt: item.createdAt,
       lastNotifiedAt: item.lastNotifiedAt,
     }));
@@ -70,6 +99,11 @@ router.get('/watchlist', auth.required, async (req: Request, res: Response) => {
         (sum, item) => sum + item.unreadChanges,
         0
       ),
+      pagination: {
+        total: totalCount,
+        offset,
+        limit: limit || totalCount,
+      },
     });
   } catch (error) {
     console.error('[Watchlist] Error getting watchlist:', error);
@@ -309,11 +343,11 @@ router.delete('/watchlist/:id', auth.required, async (req: Request, res: Respons
 
 /**
  * Update watchlist item notification preferences
- * PATCH /api/watchlist/:id
+ * PUT/PATCH /api/watchlist/:id
  * Body: { notifyOnStatus?, notifyOnActions?, notifyOnCosponsors?, digestMode? }
  * Requires authentication
  */
-router.patch('/watchlist/:id', auth.required, async (req: Request, res: Response) => {
+const updateWatchlistHandler = async (req: Request, res: Response) => {
   try {
     const userId = req.auth?.user?.id;
 
@@ -372,7 +406,10 @@ router.patch('/watchlist/:id', auth.required, async (req: Request, res: Response
       error: error instanceof Error ? error.message : 'Failed to update watchlist',
     });
   }
-});
+};
+
+router.put('/watchlist/:id', auth.required, updateWatchlistHandler);
+router.patch('/watchlist/:id', auth.required, updateWatchlistHandler);
 
 /**
  * Mark watchlist changes as read
@@ -436,6 +473,139 @@ router.post('/watchlist/:id/mark-read', auth.required, async (req: Request, res:
     console.error('[Watchlist] Error marking as read:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to mark as read',
+    });
+  }
+});
+
+/**
+ * Get watchlist statistics
+ * GET /api/watchlist/stats
+ */
+router.get('/watchlist/stats', auth.required, async (req: Request, res: Response) => {
+  const userId = req.auth?.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const watchlistItems = await prisma.userWatchlist.findMany({
+      where: { userId },
+    });
+
+    const stats = {
+      totalWatchlistItems: watchlistItems.length,
+      billsWatched: watchlistItems.filter((item) => item.billId !== null).length,
+      membersWatched: watchlistItems.filter((item) => item.memberId !== null).length,
+      topicsWatched: watchlistItems.filter((item) => item.topicKeyword !== null).length,
+    };
+
+    res.json({ stats });
+  } catch (error) {
+    console.error('[Watchlist] Error getting stats:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to get stats',
+    });
+  }
+});
+
+/**
+ * Bulk add bills to watchlist
+ * POST /api/watchlist/bulk
+ */
+router.post('/watchlist/bulk', auth.required, async (req: Request, res: Response) => {
+  const userId = req.auth?.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { billIds, memberId, notifyOnStatus, notifyOnActions, notifyOnCosponsors, digestMode } = req.body;
+
+    if (!billIds || !Array.isArray(billIds)) {
+      return res.status(400).json({ error: 'billIds array is required' });
+    }
+
+    const watchlists = [];
+
+    for (const billId of billIds) {
+      // Check if already exists
+      const existing = await prisma.userWatchlist.findUnique({
+        where: {
+          userId_billId: {
+            userId,
+            billId,
+          },
+        },
+      });
+
+      if (!existing) {
+        const watchlist = await prisma.userWatchlist.create({
+          data: {
+            userId,
+            billId,
+            notifyOnStatus: notifyOnStatus !== undefined ? notifyOnStatus : true,
+            notifyOnActions: notifyOnActions !== undefined ? notifyOnActions : true,
+            notifyOnCosponsors: notifyOnCosponsors !== undefined ? notifyOnCosponsors : false,
+            digestMode: digestMode !== undefined ? digestMode : false,
+          },
+          include: {
+            bill: true,
+          },
+        });
+
+        watchlists.push(watchlist);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      added: watchlists.length,
+      watchlists,
+    });
+  } catch (error) {
+    console.error('[Watchlist] Error bulk adding:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to bulk add',
+    });
+  }
+});
+
+/**
+ * Bulk delete watchlist items
+ * POST /api/watchlist/bulk-delete
+ */
+router.post('/watchlist/bulk-delete', auth.required, async (req: Request, res: Response) => {
+  const userId = req.auth?.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { watchlistIds } = req.body;
+
+    if (!watchlistIds || !Array.isArray(watchlistIds)) {
+      return res.status(400).json({ error: 'watchlistIds array is required' });
+    }
+
+    // Delete only user's own watchlist items
+    const result = await prisma.userWatchlist.deleteMany({
+      where: {
+        id: { in: watchlistIds },
+        userId,
+      },
+    });
+
+    res.json({
+      success: true,
+      deleted: result.count,
+    });
+  } catch (error) {
+    console.error('[Watchlist] Error bulk deleting:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to bulk delete',
     });
   }
 });

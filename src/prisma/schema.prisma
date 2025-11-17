@@ -56,6 +56,8 @@ model User {
   watchlists UserWatchlist[]
   notificationPreferences UserNotificationPreferences?
   notificationHistory     NotificationHistory[]
+  devices                 UserDevice[]
+  pushPreferences         PushNotificationPreference?
 }
 
 // ============================================================================
@@ -504,4 +506,123 @@ model SyncError {
   @@index([severity])
   @@index([createdAt])
   @@index([shouldAlert, alerted])
+}
+
+// ============================================================================
+// Push Notification Models
+// ============================================================================
+
+/// User devices for push notifications (iOS/Android)
+model UserDevice {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Device information
+  deviceToken   String   @unique     // FCM/APNs registration token
+  platform      String                // "ios" | "android"
+  deviceName    String?               // Optional user-friendly name
+  deviceModel   String?               // "iPhone 14 Pro", "Samsung Galaxy S23", etc.
+  osVersion     String?               // "iOS 17.1", "Android 13", etc.
+  appVersion    String?               // App version at time of registration
+
+  // Status
+  isActive      Boolean  @default(true)
+  lastActiveAt  DateTime @default(now())
+
+  // Badge count (iOS)
+  badgeCount    Int      @default(0)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([platform])
+  @@index([isActive])
+  @@index([lastActiveAt])
+}
+
+/// Push notification preferences with flexible criteria system
+model PushNotificationPreference {
+  id                    Int      @id @default(autoincrement())
+  userId                Int      @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Global push settings
+  pushEnabled           Boolean  @default(true)
+  soundEnabled          Boolean  @default(true)
+  vibrationEnabled      Boolean  @default(true)
+
+  // Quiet hours
+  quietHoursEnabled     Boolean  @default(false)
+  quietHoursStart       String?  @default("22:00") // "HH:MM" format
+  quietHoursEnd         String?  @default("08:00") // "HH:MM" format
+  timezone              String   @default("America/New_York")
+
+  // Rate limiting
+  maxNotificationsPerDay Int     @default(20)
+  maxNotificationsPerHour Int    @default(5)
+
+  // Criteria-based preferences (flexible JSON for future expansion)
+  // These define WHAT triggers push notifications
+
+  // Bill change criteria
+  billCriteria          Json?    @db.JsonB
+  /* Example structure:
+  {
+    "watchlistOnly": true,
+    "minSignificance": "high", // "high" | "medium" | "low"
+    "policyAreas": ["Healthcare", "Defense"],
+    "billTypes": ["hr", "s"],
+    "specificSponsors": ["A000001", "B000123"],
+    "committees": ["HSAG", "SSFI"]
+  }
+  */
+
+  // Member activity criteria
+  memberCriteria        Json?    @db.JsonB
+  /* Example structure:
+  {
+    "watchlistOnly": true,
+    "specificMembers": ["A000001"],
+    "states": ["CA", "NY"],
+    "parties": ["D", "R"],
+    "committees": ["HSAG"]
+  }
+  */
+
+  // Keyword/topic criteria
+  keywordCriteria       Json?    @db.JsonB
+  /* Example structure:
+  {
+    "keywords": ["healthcare", "climate change"],
+    "exactMatch": false,
+    "booleanLogic": "OR" // "OR" | "AND"
+  }
+  */
+
+  // Timing criteria
+  timingCriteria        Json?    @db.JsonB
+  /* Example structure:
+  {
+    "instant": true,
+    "allowDigest": false,
+    "urgentBypassQuietHours": true
+  }
+  */
+
+  // Unsubscribe
+  unsubscribeToken      String   @unique @default(uuid())
+  unsubscribedAt        DateTime?
+
+  // Analytics
+  totalNotificationsSent Int     @default(0)
+  lastNotificationSentAt DateTime?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([pushEnabled])
+  @@index([userId])
+  @@index([unsubscribeToken])
 }

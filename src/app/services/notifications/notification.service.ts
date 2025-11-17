@@ -435,6 +435,36 @@ export class NotificationService {
   }
 
   /**
+   * Get notification history for a user
+   */
+  async getHistory(userId: number, limit = 50) {
+    return await prisma.notificationHistory.findMany({
+      where: { userId },
+      include: {
+        bill: {
+          select: {
+            id: true,
+            title: true,
+            congress: true,
+            billType: true,
+            billNumber: true,
+          },
+        },
+        member: {
+          select: {
+            id: true,
+            fullName: true,
+            state: true,
+            party: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  /**
    * Get notification statistics
    */
   async getStats(hours = 24) {
