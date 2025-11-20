@@ -136,9 +136,10 @@ describe('CongressApiClient', () => {
         .query(true)
         .reply(404, { error: 'Not Found' });
 
-      // When/Then: Request should throw CongressApiException
-      await expect(client.request('/bill/118/hr/99999')).rejects.toThrow(CongressApiException);
-      await expect(client.request('/bill/118/hr/99999')).rejects.toMatchObject({
+      // When/Then: Request should throw CongressApiException with correct properties
+      const promise = client.request('/bill/118/hr/99999');
+      await expect(promise).rejects.toThrow(CongressApiException);
+      await expect(promise).rejects.toMatchObject({
         status: 404,
         message: 'Resource not found'
       });

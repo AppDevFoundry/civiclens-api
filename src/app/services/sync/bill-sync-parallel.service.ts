@@ -119,7 +119,8 @@ export class ParallelBillSyncService {
           const { bill, apiBill } = item;
 
           // Check for changes
-          const changes = await this.changeDetection.detectBillChanges(bill, apiBill);
+          // Note: detectBillChanges expects Bill type, apiBill is BillDetail - using type assertion
+          const changes = await this.changeDetection.detectBillChanges(bill, apiBill as any);
 
           // Update bill in database
           const updated = await prisma.bill.update({

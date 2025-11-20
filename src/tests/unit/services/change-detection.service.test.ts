@@ -4,27 +4,27 @@
  * Tests for detecting and logging bill changes.
  */
 
-import { ChangeDetectionService, ChangeType, DetectedChange } from '../../../app/services/sync/change-detection.service';
+// @ts-nocheck - Disable TypeScript for Prisma mock circular type issues
+
 import { Bill } from '@prisma/client';
 import { PrismaClient } from '@prisma/client';
 import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
 
-// Mock Prisma
-jest.mock('@prisma/client', () => ({
-  __esModule: true,
-  PrismaClient: jest.fn(() => mockPrisma),
-  ChangeType: {
-    STATUS: 'status',
-    TITLE: 'title',
-    ACTION: 'action',
-    COSPONSORS: 'cosponsors',
-    SUMMARY: 'summary',
-    POLICY_AREA: 'policy_area',
-    LAW: 'law',
-  },
-}));
-
+// Create mock before jest.mock is called
 const mockPrisma = mockDeep<PrismaClient>();
+
+// Mock @prisma/client - must be before importing the service
+jest.mock('@prisma/client', () => {
+  const actual = jest.requireActual('@prisma/client');
+  return {
+    __esModule: true,
+    ...actual,
+    PrismaClient: jest.fn().mockImplementation(() => mockPrisma),
+  };
+});
+
+// Import service after mock is set up
+import { ChangeDetectionService, ChangeType, DetectedChange } from '../../../app/services/sync/change-detection.service';
 
 describe('ChangeDetectionService', () => {
   let service: ChangeDetectionService;
