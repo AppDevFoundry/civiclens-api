@@ -16,7 +16,7 @@ const emailService = getEmailService();
  * Get user's notification preferences
  * GET /api/notifications/preferences
  */
-router.get('/notifications/preferences', auth as any, async (req: Request, res: Response) => {
+router.get('/notifications/preferences', auth.required, async (req: Request, res: Response) => {
   const userId = req.auth?.user?.id;
 
   if (!userId) {
@@ -38,7 +38,7 @@ router.get('/notifications/preferences', auth as any, async (req: Request, res: 
  * Update user's notification preferences
  * PUT /api/notifications/preferences
  */
-router.put('/notifications/preferences', auth as any, async (req: Request, res: Response) => {
+router.put('/notifications/preferences', auth.required, async (req: Request, res: Response) => {
   const userId = req.auth?.user?.id;
 
   if (!userId) {
@@ -212,7 +212,7 @@ router.get('/notifications/:id/track/click', async (req: Request, res: Response)
  * Get notification history for current user
  * GET /api/notifications/history
  */
-router.get('/notifications/history', auth as any, async (req: Request, res: Response) => {
+router.get('/notifications/history', auth.required, async (req: Request, res: Response) => {
   const userId = req.auth?.user?.id;
 
   if (!userId) {
@@ -260,7 +260,7 @@ router.get('/notifications/history', auth as any, async (req: Request, res: Resp
  * Get notification statistics
  * GET /api/notifications/stats
  */
-router.get('/notifications/stats', auth as any, async (req: Request, res: Response) => {
+router.get('/notifications/stats', auth.required, async (req: Request, res: Response) => {
   const userId = req.auth?.user?.id;
 
   if (!userId) {

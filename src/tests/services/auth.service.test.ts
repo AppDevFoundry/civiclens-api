@@ -1,6 +1,7 @@
 import * as bcrypt from 'bcryptjs';
-import { createUser, getCurrentUser, login, updateUser } from '../../app/routes/auth/auth.service';
+// Import mock FIRST to set up the jest.mock before auth.service imports prisma
 import prismaMock from '../prisma-mock';
+import { createUser, getCurrentUser, login, updateUser } from '../../app/routes/auth/auth.service';
 
 describe('AuthService', () => {
   describe('createUser', () => {
